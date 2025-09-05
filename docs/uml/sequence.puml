@@ -1,0 +1,58 @@
+@startuml
+title Allion AI - Job Card Preparation & Diagnosis Flow
+
+actor Customer
+actor Mechanic
+participant LiveKit
+participant STT as "STT (Sarvam/Bhashini)"
+participant N8N
+participant VLM
+participant LLM as "Agentic LLM"
+participant BoschDB
+participant OSData as "Open Source Data"
+participant Inventory
+participant InventoryAPI as "Seller Portal API"
+participant TTS as "TTS (Sarvam/Bhashini)"
+participant JobCardAPI
+participant WhatsApp
+participant Email
+
+alt Customer speaks
+    Customer -> LiveKit : Speak Issue / Share Images
+    LiveKit -> STT : Audio Stream
+    STT -> N8N : Transcribed Text (Multilingual)
+    LiveKit -> VLM : Analyze Image (if provided)
+    VLM -> N8N : Image Insights
+    N8N -> JobCardAPI : Create/Update Job Card
+end
+
+alt Mechanic speaks
+    Mechanic -> LiveKit : Speak Diagnosis / Share Images
+    LiveKit -> STT : Audio Stream
+    STT -> N8N : Transcribed Text (Multilingual)
+    LiveKit -> VLM : Analyze Image (if provided)
+    VLM -> N8N : Image Insights
+    N8N -> LLM : Send Text + Image Insights
+    LLM -> BoschDB : Query Codes / Fix Steps
+    LLM -> OSData : Fetch External Reference Data
+    LLM -> Inventory : Check Local Stock
+    alt Part Not Found
+        Inventory -> InventoryAPI : Trigger Purchase Request
+    else Part Found
+        Inventory -> LLM : Part Available
+    end
+    LLM -> N8N : Return Diagnosis + Actions
+    N8N -> JobCardAPI : Update Job Card
+
+    ' Notifications
+    N8N -> WhatsApp : Job Card / Estimate / Progress / Final Report
+    N8N -> Email : Job Card / Estimate / Progress / Final Report
+    WhatsApp -> Customer : Notify
+    Email -> Customer : Notify
+
+    ' Voice Feedback
+    N8N -> TTS : Convert Summary to Speech
+    TTS -> LiveKit : Play Audio to Customer
+end
+
+@enduml

@@ -1,0 +1,19 @@
+# Core LangChain components
+langchain==0.3.27
+langchain-community==0.3.28
+langchain-core==0.3.75
+langchain-openai==0.3.32
+langchainhub==0.1.21
+
+# Core
+python-dotenv==1.0.1
+spacy==3.8.7
+en_core_web_trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl#sha256=272a31e9d8530d1e075351d30a462d7e80e31da23574f1b274e200f3fff35bf5
+
+
+# Vector database
+chromadb==1.0.20
+
+# Docling (and core)
+docling==2.49.0
+docling-core==2.46.0
