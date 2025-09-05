@@ -1,0 +1,50 @@
+@startuml
+title Allion AI - Detailed Architecture
+
+' Components
+rectangle "n8n Orchestration" as N8N
+rectangle "LiveKit\n(Real-time Audio/Video)" as LiveKit
+rectangle "STT Service\n(Sarvam/Bhashini)" as STT
+rectangle "TTS Service\n(Sarvam/Bhashini)" as TTS
+rectangle "smolVLM" as VLM
+rectangle "Agentic LLM" as LLM
+database "Bosch Database" as BoschDB
+database "Open Source Data\n(Google / YouTube)" as OSData
+rectangle "Workshop UI\n(Web/Mobile)" as UI
+
+' External systems
+rectangle "Customer" as Customer
+rectangle "Job Card API" as JobCardAPI
+rectangle "Inventory" as Inventory
+rectangle "Seller Portal" as InventoryAPI
+rectangle "WhatsApp API" as WhatsApp
+rectangle "Email Service" as Email
+
+' Connections
+LiveKit -->  UI: Speech
+LiveKit --> STT : Audio Stream
+STT --> N8N : Text (Multilingual)
+LiveKit --> VLM : Images
+UI --> LiveKit : Chat / Images
+UI --> LiveKit : Audio Channel
+UI --> JobCardAPI : Job Card Create/Update
+
+VLM --> N8N : Image Insights
+N8N --> LLM : Text Prompt / Context
+LLM --> BoschDB : Query
+LLM --> OSData : Query
+LLM --> Inventory : Check
+Inventory --> InventoryAPI : Order
+LLM --> N8N : Response / Action
+N8N --> TTS : Text to Speech
+TTS --> LiveKit : Audio Out
+
+JobCardAPI --> N8N : Populated Job Card
+
+' New communication flows
+N8N --> WhatsApp : Job Card, Estimate,\nProgress updates,\nFinal delivery report
+N8N --> Email : Job Card, Estimate,\nProgress updates,\nFinal delivery report
+WhatsApp --> Customer
+Email --> Customer
+
+@enduml

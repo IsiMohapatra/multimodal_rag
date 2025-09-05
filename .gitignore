@@ -1,0 +1,10 @@
+# Python virtual environment
+multimodal_rag/Lib/
+multimodal_rag/Scripts/
+multimodal_rag/Include/
+
+# Environment file
+.env
+
+# Output folder
+output/
