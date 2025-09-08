@@ -126,60 +126,60 @@ Answer only with "YES" or "NO".
 
     def ask(self, question: str):
         try:
-            print(self.memory)
-            # 🔹 Step 0: If we are waiting for vehicle info, treat this input as that
-            if "pending_question" in self.memory:
-                vehicle_info = self.extract_vehicle_model(question)
-                if vehicle_info:
-                    merged_question = f"{self.memory['pending_question']} for {vehicle_info}"
-                    self.memory["vehicle_info"] = vehicle_info
-                    del self.memory["pending_question"]
-                    question = merged_question
-                else:
-                    return {
-                        "answer": "I didn’t catch the make and model, can you repeat it clearly?",
-                        "source_documents": []
-                    }
-
-            else:
-                # 🔹 Step 1: Normal vehicle-related check
-                if not self.is_vehicle_related(question):
-                    return {
-                        "answer": "Please ask me about vehicle-related problems, I’ll be happy to assist you.",
-                        "source_documents": []
-                    }
-
-            # 🔹 Step 2: Handle DTC codes
+            # 🔹 Step 0: Check if query contains a DTC code first
             dtc_match = re.search(r"\b([PBUC]\d{4})\b", question.upper())
             if dtc_match:
                 dtc_code = dtc_match.group(1)
                 self.memory["dtc_code"] = dtc_code
                 self.memory["last_topic"] = f"DTC {dtc_code}"
-
-            # 🔹 Step 3: Extract vehicle info
-            vehicle_info = self.extract_vehicle_model(question)
-            if not vehicle_info and not self.memory.get("vehicle_info"):
-                self.memory["pending_question"] = question
-                return {
-                    "answer": "Can you please specify the make and model of your vehicle?",
-                    "source_documents": []
-                }
-
-            if vehicle_info:
-                # ✅ Use extracted info, don’t duplicate with memory
-                self.memory["vehicle_info"] = vehicle_info
-                self.memory["last_topic"] = vehicle_info
+                # Directly send to LLM without asking for vehicle info
+                final_question = question
+            else:
+                # 🔹 Step 1: If we are waiting for vehicle info, treat this input as that
                 if "pending_question" in self.memory:
-                    del self.memory["pending_question"]
+                    vehicle_info = self.extract_vehicle_model(question)
+                    if vehicle_info:
+                        merged_question = f"{self.memory['pending_question']} for {vehicle_info}"
+                        self.memory["vehicle_info"] = vehicle_info
+                        del self.memory["pending_question"]
+                        final_question = merged_question
+                    else:
+                        return {
+                            "answer": "I didn’t catch the make and model, can you repeat it clearly?",
+                            "source_documents": []
+                        }
+                else:
+                    # 🔹 Step 2: Normal vehicle-related check
+                    if not self.is_vehicle_related(question):
+                        return {
+                            "answer": "Please ask me about vehicle-related problems, I’ll be happy to assist you.",
+                            "source_documents": []
+                        }
 
-            elif not vehicle_info and self.memory.get("vehicle_info") and self.memory.get("pending_question"):
-                # ✅ Only fallback if extractor found nothing
-                question = f"{question} for {self.memory['vehicle_info']}"
-            
-            print(f"\n🚀 Final query sent to retriever/LLM: {question}\n")
+                    # 🔹 Step 3: Extract vehicle info
+                    vehicle_info = self.extract_vehicle_model(question)
+                    if not vehicle_info and not self.memory.get("vehicle_info"):
+                        self.memory["pending_question"] = question
+                        return {
+                            "answer": "Can you please specify the make and model of your vehicle?",
+                            "source_documents": []
+                        }
+
+                    if vehicle_info:
+                        self.memory["vehicle_info"] = vehicle_info
+                        self.memory["last_topic"] = vehicle_info
+                        if "pending_question" in self.memory:
+                            del self.memory["pending_question"]
+                        final_question = question
+                    elif self.memory.get("vehicle_info") and self.memory.get("pending_question"):
+                        final_question = f"{question} for {self.memory['vehicle_info']}"
+                    else:
+                        final_question = question
+
+            print(f"\n🚀 Final query sent to retriever/LLM: {final_question}\n")
 
             # 🔹 Step 4: Retrieve relevant documents
-            docs = self.retriever.get_relevant_documents(question)
+            docs = self.retriever.get_relevant_documents(final_question)
             if not docs:
                 return {"answer": "No relevant information found in the PDF.", "source_documents": []}
 
@@ -206,7 +206,7 @@ Answer only with "YES" or "NO".
     Conversation History:
     {history_text}
 
-    QUESTION: {question}
+    QUESTION: {final_question}
 
     CHUNKS:
     {context_text}
@@ -225,7 +225,7 @@ Answer only with "YES" or "NO".
 
             # 🔹 Step 9: Save Q&A
             self.memory["conversation_history"].append({
-                "question": question,
+                "question": final_question,
                 "answer": answer_text
             })
 
@@ -246,7 +246,6 @@ Answer only with "YES" or "NO".
 
 
 
-
 # ---------------------------------------
 # Save the conversation of the session
 # ----------------------------------------
@@ -254,20 +253,29 @@ Answer only with "YES" or "NO".
 def save_conversation_to_word(conversation_history, output_path="Allion_Session.docx"):
     """
     Save conversation to Word and embed images.
-    Forces path to include 'output/markdowns/output/markdowns/...'.
+    Dynamically finds the project root (multimodal_rag) and preserves
+    the duplicated 'output/markdowns/output/markdowns' structure for images.
     """
     doc = Document()
     doc.add_heading("Allion Automotive Assistant Session", level=0)
 
-    project_root = Path(__file__).resolve().parent.parent  # go up from multimodal_rag/
+    # 🔹 Dynamically detect multimodal_rag root folder
+    project_root = Path(__file__).resolve()
+    while project_root.name != "multimodal_rag":
+        if project_root.parent == project_root:
+            raise RuntimeError("Could not find 'multimodal_rag' in parent directories.")
+        project_root = project_root.parent
 
     for turn in conversation_history:
+        # Add user's question
         doc.add_paragraph(f"🧑 You: {turn['question']}", style="Intense Quote")
 
         answer_text = turn['answer']
+        # Find all images in markdown format ![alt](path)
         img_matches = re.findall(r"!\[.*?\]\((.*?)\)", answer_text)
 
         if img_matches:
+            # Split text around images
             parts = re.split(r"!\[.*?\]\(.*?\)", answer_text)
             for i, part in enumerate(parts):
                 if part.strip():
@@ -275,10 +283,8 @@ def save_conversation_to_word(conversation_history, output_path="Allion_Session.
 
                 if i < len(img_matches):
                     rel_path = Path(img_matches[i])
-
-                    # 🔑 Force an extra "output/markdowns" into the path
+                    # 🔹 Preserve duplicated 'output/markdowns/output/markdowns'
                     fixed_path = project_root / "output" / "markdowns" / rel_path
-
                     img_path = fixed_path.resolve()
 
                     if img_path.exists():
@@ -286,10 +292,13 @@ def save_conversation_to_word(conversation_history, output_path="Allion_Session.
                     else:
                         doc.add_paragraph(f"[Image not found: {img_path}]")
         else:
+            # No images, just add the text
             doc.add_paragraph(f"🤖 Allion: {answer_text}")
 
+    # Save the Word document
     doc.save(output_path)
     print(f"✅ Conversation saved to {output_path}")
+
 
 
 
