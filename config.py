@@ -9,5 +9,5 @@ CHUNKS_DIR = f"{OUTPUT_DIR}/chunks"
 CHROMA_DB_DIR = f"{OUTPUT_DIR}/chroma_db"
 
 # Models
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "open-ai embeddings"
 LLM_MODEL = "gpt-4o-mini"

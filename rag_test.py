@@ -1,16 +1,20 @@
 import os
 import sys
 import logging
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 import spacy
-import re
 from docx import Document
-from docx.shared import Inches
+from IPython.display import Image, display
 
 from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import OpenAIEmbeddings
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, List, Dict, Any
+from langchain.prompts import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
 
 # -------------------------
 # Logging setup
@@ -55,8 +59,38 @@ llm = ChatOpenAI(
     openai_api_key=OPENAI_API_KEY
 )
 
+
 # -------------------------
-# Assistant Class
+# Retrieval Grader
+# -------------------------
+grader_llm = ChatOpenAI(
+    model="gpt-4o-mini",   # or "gpt-4" etc.
+    temperature=0.0,
+    openai_api_key=OPENAI_API_KEY
+)
+  # replace with your model
+grader_prompt = PromptTemplate(
+    template="""You are a teacher grading a quiz. You will be given: 
+1/ a QUESTION
+2/ A FACT provided by the student
+
+You are grading RELEVANCE RECALL:
+A score of 1 means that ANY of the statements in the FACT are relevant to the QUESTION. 
+A score of 0 means that NONE of the statements in the FACT are relevant to the QUESTION. 
+
+Provide the binary score as a JSON with a single key 'score' and no preamble or explanation.
+
+Question: {question} 
+Fact: {documents}
+""",
+    input_variables=["question", "documents"]
+)
+retrieval_grader = grader_prompt | grader_llm | JsonOutputParser()
+
+
+
+# -------------------------
+# Assistant Class 
 # -------------------------
 
 def is_dtc_code(question: str) -> bool:
@@ -79,15 +113,23 @@ class Assistant:
 
     def is_vehicle_related(self, question: str) -> bool:
         classifier_prompt = f"""
-You are a classifier. Decide if the user question is about **vehicle diagnostics, repair, or automotive problems**.
+            You are a classifier. Decide if the user question is about vehicle diagnostics, repair, or automotive problems. 
+            Answer YES if it’s about vehicle issues, maintenance, repairs, faults, or checks.
+            Answer NO if it’s unrelated to vehicles.
 
-QUESTION: {question}
+            Examples:
+            - "How do I replace my brake pads?" → YES
+            - "What is the capital of France?" → NO
+            - "Can I change the engine oil myself?" → YES
+            - "Tell me a joke." → NO
 
-Answer only with "YES" or "NO".
-"""     
-        print("it is a vehicle related problem")
+            QUESTION: {question}
+
+            Answer only with "YES" or "NO".
+        """     
+        
         response = llm.predict(classifier_prompt).strip().upper()
-        return response == "YES"
+        return response == "YES" 
 
     def extract_vehicle_model(self, question: str) -> str:
         doc = self.nlp(question)
@@ -125,6 +167,7 @@ Answer only with "YES" or "NO".
 
 
     def ask(self, question: str):
+        print(self.memory)
         try:
             # 🔹 Step 0: Check if query contains a DTC code first
             dtc_match = re.search(r"\b([PBUC]\d{4})\b", question.upper())
@@ -243,94 +286,101 @@ Answer only with "YES" or "NO".
             print(f"❌ Error in ask(): {e}")
             return {"answer": "Error occurred.", "source_documents": []}
 
-
-
-
-# ---------------------------------------
-# Save the conversation of the session
-# ----------------------------------------
-
-def save_conversation_to_word(conversation_history, output_path="Allion_Session.docx"):
-    """
-    Save conversation to Word and embed images.
-    Dynamically finds the project root (multimodal_rag) and preserves
-    the duplicated 'output/markdowns/output/markdowns' structure for images.
-    """
-    doc = Document()
-    doc.add_heading("Allion Automotive Assistant Session", level=0)
-
-    # 🔹 Dynamically detect multimodal_rag root folder
-    project_root = Path(__file__).resolve()
-    while project_root.name != "multimodal_rag":
-        if project_root.parent == project_root:
-            raise RuntimeError("Could not find 'multimodal_rag' in parent directories.")
-        project_root = project_root.parent
-
-    for turn in conversation_history:
-        # Add user's question
-        doc.add_paragraph(f"🧑 You: {turn['question']}", style="Intense Quote")
-
-        answer_text = turn['answer']
-        # Find all images in markdown format ![alt](path)
-        img_matches = re.findall(r"!\[.*?\]\((.*?)\)", answer_text)
-
-        if img_matches:
-            # Split text around images
-            parts = re.split(r"!\[.*?\]\(.*?\)", answer_text)
-            for i, part in enumerate(parts):
-                if part.strip():
-                    doc.add_paragraph(f"🤖 Allion: {part.strip()}")
-
-                if i < len(img_matches):
-                    rel_path = Path(img_matches[i])
-                    # 🔹 Preserve duplicated 'output/markdowns/output/markdowns'
-                    fixed_path = project_root / "output" / "markdowns" / rel_path
-                    img_path = fixed_path.resolve()
-
-                    if img_path.exists():
-                        doc.add_picture(str(img_path), width=Inches(5))
-                    else:
-                        doc.add_paragraph(f"[Image not found: {img_path}]")
-        else:
-            # No images, just add the text
-            doc.add_paragraph(f"🤖 Allion: {answer_text}")
-
-    # Save the Word document
-    doc.save(output_path)
-    print(f"✅ Conversation saved to {output_path}")
-
-
-
-
 # -------------------------
-# Interactive session
+# LangGraph Node Wrapper
 # -------------------------
-def main():
-    print("🚗 Allion Automotive Assistant Started! Type 'exit' to quit.\n")
+
+class AssistantState(TypedDict, total=False):
+    question: str
+    answer: str
+    source_documents: List[Dict[str, Any]]
+    graded: bool
+    relevance_score: Any
+
+def assistant_node(state: AssistantState) -> AssistantState:
     assistant = Assistant()
+    result = assistant.ask(state["question"])
+    
+    # Store answer and source documents
+    state["answer"] = result.get("answer", "")
+    state["source_documents"] = result.get("source_documents", [])
+    
+    # Ensure grading keys are initialized
+    state["graded"] = False
+    state["relevance_score"] = "N/A"
+    
+    return state
+
+
+def grade_document_node(state: AssistantState) -> AssistantState:
+    question = state["question"]
+    docs = state.get("source_documents", [])
+
+    if not docs:
+        doc_txt = state.get("answer", "")
+    else:
+        doc_txt = docs[0].get("content", state.get("answer", ""))
+
+    # Run grader
+    score = retrieval_grader.invoke({"question": question, "documents": doc_txt})
+
+    # Update state
+    state["graded"] = True
+    state["relevance_score"] = score.get("score", "N/A")
+
+    # Return a dict that includes grading score explicitly for streaming events
+    return {
+        "question": question,
+        "answer": state.get("answer", ""),
+        "source_documents": docs,
+        "graded": True,
+        "relevance_score": state["relevance_score"]
+    }
+
+
+
+# -------------------------
+# Build Graph
+# -------------------------
+
+def build_graph():
+    graph = StateGraph(AssistantState)
+    
+    graph.add_node("assistant", assistant_node)
+    graph.add_node("grade_document", grade_document_node)
+
+    graph.set_entry_point("assistant")
+    graph.add_edge("assistant", "grade_document")
+    graph.add_edge("grade_document", END)
+    
+    return graph.compile()
+
+
+# -------------------------
+# Run Example
+# -------------------------
+
+if __name__ == "__main__":
+    app = build_graph()
+    print("🚗 Allion Automotive Assistant (LangGraph Node) Started! Type 'exit' to quit.\n")
 
     while True:
         question = input("🧑 You: ").strip()
         if question.lower() in ["exit", "quit"]:
             print("👋 Ending session.")
-            # Save final conversation before exit
-            save_conversation_to_word(assistant.memory["conversation_history"])
             break
 
-        # Ask assistant
-        answer = assistant.ask(question)
-
-        # Display answer
-        print(f"\n🤖 Allion: {answer['answer']}\n")
-
-        # Show source documents if available
-        if answer.get("source_documents"):
+    
+        # 🔹 Final result (same as invoke)
+        result = app.invoke({"question": question})
+        
+        # Answer
+        print(f"\n🤖 Allion: {result['answer']}\n")
+        print(f"✅ Graded: {result['graded']}, Score: {result.get('relevance_score', 'N/A')}\n")
+'''
+        # Show sources if available
+        if result.get("source_documents"):
             print("📄 Source Documents:")
-            for doc in answer["source_documents"]:
+            for doc in result["source_documents"]:
                 print(f" - Page: {doc['page_number']}")
-
-        # Save conversation after every turn
-        save_conversation_to_word(assistant.memory["conversation_history"])
-
-if __name__ == "__main__":
-    main()
+'''
